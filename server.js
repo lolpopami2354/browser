@@ -4,85 +4,43 @@ import fetch from "node-fetch";
 import cors from "cors";
 
 const app = express();
-
 app.use(cors());
-app.use(express.json());
 
-// Simple in-memory cache (LRU-ish)
-const cache = new Map();
-const CACHE_TTL_MS = 60 * 1000; // 1 min
+const API_KEY = process.env.GOOGLE_API_KEY;
+const CX = process.env.GOOGLE_CX;
 
-function getCache(key) {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  const { ts, data } = entry;
-  if (Date.now() - ts > CACHE_TTL_MS) {
-    cache.delete(key);
-    return null;
-  }
-  return data;
-}
-function setCache(key, data) {
-  cache.set(key, { ts: Date.now(), data });
+if (!API_KEY || !CX) {
+  console.warn("Set GOOGLE_API_KEY and GOOGLE_CX env vars before running.");
 }
 
-// Basic rate-limit (IP-based, per minute)
-const hits = new Map();
-function rateLimit(req, res, next) {
-  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "anon";
-  const windowMs = 60 * 1000;
-  const limit = 60; // 60 requests/min
-  const now = Date.now();
-  let entry = hits.get(ip);
-  if (!entry || now - entry.ts > windowMs) {
-    entry = { ts: now, count: 0 };
-    hits.set(ip, entry);
-  }
-  entry.count++;
-  if (entry.count > limit) {
-    return res.status(429).json({ error: "Too Many Requests" });
-  }
-  next();
-}
-
-app.get("/search", rateLimit, async (req, res) => {
+app.get("/search", async (req, res) => {
   const q = (req.query.q || "").trim();
+  const start = parseInt(req.query.start || "1", 10);
   if (!q) return res.status(400).json({ error: "Missing q" });
+  if (!API_KEY || !CX) return res.status(500).json({ error: "Server not configured" });
 
-  const cacheKey = `ddg:${q}`;
-  const cached = getCache(cacheKey);
-  if (cached) return res.json(cached);
+  const url = new URL("https://www.googleapis.com/customsearch/v1");
+  url.searchParams.set("key", API_KEY);
+  url.searchParams.set("cx", CX);
+  url.searchParams.set("q", q);
+  url.searchParams.set("start", String(start)); // pagination
 
   try {
-    // DuckDuckGo Instant Answer API (JSON)
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`;
-    const r = await fetch(url, { timeout: 8000 });
-    if (!r.ok) throw new Error(`Upstream error ${r.status}`);
+    const r = await fetch(url.toString(), { timeout: 8000 });
     const data = await r.json();
+    if (!r.ok) return res.status(r.status).json(data);
 
-    // Normalize to a simple result schema for the frontend
+    // Normalize minimal fields the frontend needs
     const normalized = {
       query: q,
-      heading: data.Heading || null,
-      abstract: data.Abstract || null,
-      abstractSource: data.AbstractSource || null,
-      abstractURL: data.AbstractURL || null,
-      relatedTopics: (data.RelatedTopics || [])
-        .map(rt => {
-          if (rt.Text && rt.FirstURL) return { text: rt.Text, url: rt.FirstURL };
-          if (rt.Topics && Array.isArray(rt.Topics)) {
-            return rt.Topics
-              .filter(t => t.Text && t.FirstURL)
-              .map(t => ({ text: t.Text, url: t.FirstURL }));
-          }
-          return null;
-        })
-        .flat()
-        .filter(Boolean)
-        .slice(0, 8)
+      nextStart: data.queries?.nextPage?.[0]?.startIndex || null,
+      items: (data.items || []).map(it => ({
+        title: it.title,
+        snippet: it.snippet,
+        url: it.link,
+        displayUrl: it.displayLink
+      }))
     };
-
-    setCache(cacheKey, normalized);
     res.json(normalized);
   } catch (e) {
     console.error(e);
@@ -91,6 +49,4 @@ app.get("/search", rateLimit, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Proxy listening on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`Proxy on http://localhost:${PORT}`));
