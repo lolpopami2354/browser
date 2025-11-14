@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Embedded Search</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1226;
+      --panel: #1b1f3b;
+      --accent: #6c8cff;
+      --text: #e6e9ff;
+      --muted: #9aa3c7;
+      --border: #2a315e;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+    }
+    .widget {
+      width: min(760px, 92vw);
+      background: linear-gradient(180deg, #171a32, #12142b);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+      overflow: hidden;
+    }
+    .bar {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+    }
+    .pill {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #ff5f57;
+      box-shadow: 18px 0 0 #febc2e, 36px 0 0 #28c840;
+      margin-left: 4px;
+    }
+    .title {
+      margin-left: 48px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.2px;
+    }
+    form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 16px;
+    }
+    input[type="search"] {
+      background: #10132a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 16px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      outline: none;
+    }
+    input[type="search"]::placeholder { color: #7d86ad; }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 12px 16px;
+      border-radius: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: filter 0.15s ease;
+    }
+    button:hover { filter: brightness(1.05); }
+    .results {
+      padding: 8px 16px 16px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      background: #12142b;
+      border-radius: 12px;
+      padding: 14px;
+      margin-top: 10px;
+    }
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 18px;
+    }
+    .meta { color: var(--muted); font-size: 13px; }
+    .links {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+      margin-top: 10px;
+    }
+    .link {
+      display: block;
+      border: 1px solid var(--border);
+      background: #0f1124;
+      padding: 10px;
+      border-radius: 10px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .error {
+      background: #2a1a1a;
+      border: 1px solid #5a2a2a;
+      color: #ffb4b4;
+      border-radius: 10px;
+      padding: 12px;
+      margin-top: 10px;
+    }
+    .loader { color: var(--muted); padding: 8px 16px 16px; }
+    footer {
+      padding: 10px 16px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      background: #12132b;
+    }
+  </style>
+</head>
+<body>
+  <div class="widget" role="search">
+    <div class="bar">
+      <div class="pill" aria-hidden="true"></div>
+      <div class="title">Embedded Search</div>
+    </div>
+
+    <form id="searchForm" autocomplete="off">
+      <input id="q" type="search" placeholder="Search anything…" aria-label="Search query" />
+      <button type="submit">Search</button>
+    </form>
+
+    <div id="status" class="loader" hidden>Searching…</div>
+    <div id="results" class="results" aria-live="polite"></div>
+
+    <footer>
+      Proxying requests via your server to avoid CORS and hide API details.
+    </footer>
+  </div>
+
+  <script>
+    const form = document.getElementById("searchForm");
+    const input = document.getElementById("q");
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+
+    function showStatus(text) {
+      status.textContent = text;
+      status.hidden = false;
+    }
+    function hideStatus() { status.hidden = true; }
+
+    function renderError(msg) {
+      results.innerHTML = `<div class="error">${msg}</div>`;
+    }
+
+    function renderResults(data) {
+      const parts = [];
+      if (data.heading || data.abstract) {
+        parts.push(`
+          <div class="card">
+            <h3>${data.heading ? escapeHtml(data.heading) : "Result"}</h3>
+            <div class="meta">
+              ${data.abstractSource ? `Source: ${escapeHtml(data.abstractSource)}` : ""}
+              ${data.abstractURL ? ` &bull; <a href="${data.abstractURL}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
+            </div>
+            ${data.abstract ? `<p>${escapeHtml(data.abstract)}</p>` : ""}
+          </div>
+        `);
+      }
+      if (data.relatedTopics && data.relatedTopics.length) {
+        parts.push(`
+          <div class="card">
+            <h3>Related</h3>
+            <div class="links">
+              ${data.relatedTopics.map(rt => `
+                <a class="link" href="${rt.url}" target="_blank" rel="noopener noreferrer">
+                  ${escapeHtml(rt.text)}
+                </a>
+              `).join("")}
+            </div>
+          </div>
+        `);
+      }
+      if (!parts.length) {
+        parts.push(`<div class="card"><p>No instant answers found. Try a broader query.</p></div>`);
+      }
+      results.innerHTML = parts.join("");
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      })[c]);
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      results.innerHTML = "";
+      showStatus("Searching…");
+      try {
+        const r = await fetch(`/search?q=${encodeURIComponent(q)}`);
+        const data = await r.json();
+        hideStatus();
+        if (!r.ok) {
+          return renderError(data.error || "Request failed");
+        }
+        renderResults(data);
+      } catch (err) {
+        hideStatus();
+        renderError("Network error. Please try again.");
+      }
+    });
+  </script>
+</body>
+</html>
